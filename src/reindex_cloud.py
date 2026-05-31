@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 import chromadb
@@ -9,13 +10,15 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
 BOOKS_DIR = Path("books")
-COLLECTION_NAME = "esoteric_books"
-BATCH_SIZE = 100
 
 
 load_dotenv()
 
+COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "esoteric_books_google")
 EMBEDDING_MODEL = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/gemini-embedding-001")
+BATCH_SIZE = int(os.getenv("REINDEX_BATCH_SIZE", "5"))
+RESET_COLLECTION = os.getenv("RESET_COLLECTION", "false").lower() == "true"
+REINDEX_SLEEP_SECONDS = float(os.getenv("REINDEX_SLEEP_SECONDS", "2"))
 
 
 def load_documents():
@@ -52,15 +55,22 @@ def main():
         database=os.environ["CHROMA_DATABASE"],
     )
 
-    try:
-        client.delete_collection(COLLECTION_NAME)
-        print(f"Deleted existing cloud collection: {COLLECTION_NAME}")
-    except Exception:
-        pass
+    if RESET_COLLECTION:
+        try:
+            client.delete_collection(COLLECTION_NAME)
+            print(f"Deleted existing cloud collection: {COLLECTION_NAME}")
+        except Exception:
+            pass
 
     collection = client.get_or_create_collection(COLLECTION_NAME)
+    start_offset = collection.count()
+    if start_offset:
+        print(
+            f"Collection {COLLECTION_NAME} already has {start_offset} documents. "
+            f"Resuming from offset {start_offset}."
+        )
 
-    for offset in range(0, len(chunks), BATCH_SIZE):
+    for offset in range(start_offset, len(chunks), BATCH_SIZE):
         batch = chunks[offset:offset + BATCH_SIZE]
         texts = [doc.page_content for doc in batch]
         metadatas = [doc.metadata for doc in batch]
@@ -75,6 +85,8 @@ def main():
         )
 
         print(f"Uploaded {min(offset + len(batch), len(chunks))} / {len(chunks)}")
+        if REINDEX_SLEEP_SECONDS > 0:
+            time.sleep(REINDEX_SLEEP_SECONDS)
 
     print(f"Cloud documents: {collection.count()}")
 

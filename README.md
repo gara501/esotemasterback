@@ -50,10 +50,13 @@ Invoke-WebRequest `
 CHROMA_API_KEY=
 CHROMA_TENANT=
 CHROMA_DATABASE=esoter
+CHROMA_COLLECTION=esoteric_books_google
 GOOGLE_API_KEY=
 GOOGLE_LLM_MODEL=gemini-2.5-flash
 GOOGLE_EMBEDDING_MODEL=models/gemini-embedding-001
 ALLOWED_ORIGINS=*
+REINDEX_BATCH_SIZE=5
+REINDEX_SLEEP_SECONDS=2
 ```
 
 For production, replace `ALLOWED_ORIGINS=*` with your Netlify domain:
@@ -72,8 +75,12 @@ the environment variables, then run:
 python -m src.reindex_cloud
 ```
 
-This deletes and recreates the Chroma Cloud collection `esoteric_books` with
-Gemini embeddings.
+By default this creates `esoteric_books_google` with Gemini embeddings and leaves
+the old collection untouched. Set `CHROMA_COLLECTION=esoteric_books_google` in
+the deployed backend after the reindex completes.
+
+If Google AI Studio returns quota errors, rerun the same command later. The
+script resumes from the current collection count.
 
 `src/ingest.py` can still build a local Chroma database from PDFs placed in
 `books/`. The `books/` folder and `chroma_db/` are intentionally ignored and are

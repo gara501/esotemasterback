@@ -11,7 +11,7 @@ from sentence_transformers import CrossEncoder
 
 load_dotenv()
 
-COLLECTION_NAME = "esoteric_books"
+COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "esoteric_books")
 
 LLM_MODEL = os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash")
 EMBEDDING_MODEL = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/gemini-embedding-001")
