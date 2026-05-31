@@ -1,15 +1,13 @@
 # Esoteric AI Teacher Backend
 
 FastAPI backend for the Esoteric AI Teacher app. It queries a Chroma Cloud
-collection and uses local Ollama models for embeddings and answer generation.
+collection and uses Google AI Studio Gemini models for embeddings and answer
+generation.
 
 ## Requirements
 
 - Python 3.11+
-- Ollama running locally
-- Ollama models:
-  - `bge-m3`
-  - `gemma3:4b`
+- Google AI Studio API key
 - Chroma Cloud database with collection `esoteric_books`
 
 ## Setup
@@ -21,7 +19,8 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Fill `.env` with your own Chroma Cloud credentials. Do not commit `.env`.
+Fill `.env` with your own Chroma Cloud and Google AI Studio credentials. Do not
+commit `.env`.
 
 ## Run
 
@@ -51,11 +50,24 @@ Invoke-WebRequest `
 CHROMA_API_KEY=
 CHROMA_TENANT=
 CHROMA_DATABASE=esoter
-OLLAMA_HOST=http://127.0.0.1:11434
+GOOGLE_API_KEY=
+GOOGLE_LLM_MODEL=gemini-2.5-flash
+GOOGLE_EMBEDDING_MODEL=models/gemini-embedding-001
 ```
 
-## Local Ingestion
+## Chroma Reindexing
 
-`src/ingest.py` can build a local Chroma database from PDFs placed in `books/`.
-The `books/` folder and `chroma_db/` are intentionally ignored and are not part
-of this repository.
+If your Chroma Cloud collection was previously indexed with Ollama `bge-m3`, you
+must rebuild it with Google embeddings. Put the licensed PDFs in `books/`, set
+the environment variables, then run:
+
+```powershell
+python -m src.reindex_cloud
+```
+
+This deletes and recreates the Chroma Cloud collection `esoteric_books` with
+Gemini embeddings.
+
+`src/ingest.py` can still build a local Chroma database from PDFs placed in
+`books/`. The `books/` folder and `chroma_db/` are intentionally ignored and are
+not part of this repository.

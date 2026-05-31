@@ -1,14 +1,21 @@
+import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_ollama import OllamaEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 
 
 BOOKS_DIR = Path("books")
 DB_DIR = "chroma_db"
 COLLECTION_NAME = "esoteric_books"
+
+
+load_dotenv()
+
+EMBEDDING_MODEL = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/gemini-embedding-001")
 
 
 def ingest():
@@ -35,7 +42,7 @@ def ingest():
 
     chunks = splitter.split_documents(docs)
 
-    embeddings = OllamaEmbeddings(model="bge-m3")
+    embeddings = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL)
 
     Chroma.from_documents(
         documents=chunks,

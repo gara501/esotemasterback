@@ -4,19 +4,29 @@ from typing import Any
 
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from sentence_transformers import CrossEncoder
 
 
+load_dotenv()
+
 COLLECTION_NAME = "esoteric_books"
 
-LLM_MODEL = "gemma3:4b"
-EMBEDDING_MODEL = "bge-m3"
+LLM_MODEL = os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash")
+EMBEDDING_MODEL = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/gemini-embedding-001")
 RERANKER_MODEL = "BAAI/bge-reranker-base"
 
 
-load_dotenv()
+def get_google_api_key() -> str:
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+
+    if not api_key:
+        raise RuntimeError(
+            "Missing Google AI Studio API key. Set GOOGLE_API_KEY or GEMINI_API_KEY."
+        )
+
+    return api_key
 
 
 MODE_PROMPTS = {
@@ -67,7 +77,12 @@ DEFAULT_RAG_CONFIG = {
 }
 
 
-embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL)
+google_api_key = get_google_api_key()
+
+embeddings = GoogleGenerativeAIEmbeddings(
+    model=EMBEDDING_MODEL,
+    google_api_key=google_api_key,
+)
 
 vectorstore = Chroma(
     collection_name=COLLECTION_NAME,
@@ -137,11 +152,12 @@ Formato JSON obligatorio:
 """)
 
 
-def build_llm(num_predict: int = 4096) -> ChatOllama:
-    return ChatOllama(
+def build_llm(num_predict: int = 4096) -> ChatGoogleGenerativeAI:
+    return ChatGoogleGenerativeAI(
         model=LLM_MODEL,
+        google_api_key=google_api_key,
         temperature=0.25,
-        num_predict=num_predict,
+        max_output_tokens=num_predict,
     )
 
 
