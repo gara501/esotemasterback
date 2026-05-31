@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from sentence_transformers import CrossEncoder
 
 
 load_dotenv()
@@ -16,6 +15,8 @@ COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "esoteric_books")
 LLM_MODEL = os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash")
 EMBEDDING_MODEL = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/gemini-embedding-001")
 RERANKER_MODEL = "BAAI/bge-reranker-base"
+ENABLE_RERANK = os.getenv("ENABLE_RERANK", "false").lower() == "true"
+_reranker = None
 
 
 def get_google_api_key() -> str:
@@ -68,9 +69,9 @@ correspondencias simbólicas y tensiones entre tradiciones.
 
 
 DEFAULT_RAG_CONFIG = {
-    "use_rerank": True,
-    "initial_k": 20,
-    "final_k": 8,
+    "use_rerank": False,
+    "initial_k": 10,
+    "final_k": 6,
     "num_predict": 4096,
     "detail_level": "extensive",
     "force_detailed_answer": True,
@@ -92,9 +93,6 @@ vectorstore = Chroma(
     database=os.environ["CHROMA_DATABASE"],
     create_collection_if_not_exists=False,
 )
-
-reranker = CrossEncoder(RERANKER_MODEL)
-
 
 prompt = ChatPromptTemplate.from_template("""
 Eres un maestro de estudios esotéricos.
@@ -167,10 +165,10 @@ def normalize_rag_config(rag_config: dict | None) -> dict:
     if rag_config:
         config.update(rag_config)
 
-    config["initial_k"] = int(config.get("initial_k", 20))
-    config["final_k"] = int(config.get("final_k", 8))
+    config["initial_k"] = int(config.get("initial_k", 10))
+    config["final_k"] = int(config.get("final_k", 6))
     config["num_predict"] = int(config.get("num_predict", 4096))
-    config["use_rerank"] = bool(config.get("use_rerank", True))
+    config["use_rerank"] = bool(config.get("use_rerank", False)) and ENABLE_RERANK
     config["force_detailed_answer"] = bool(config.get("force_detailed_answer", True))
 
     if config["final_k"] > config["initial_k"]:
@@ -206,6 +204,7 @@ def rerank_documents(query: str, docs: list[Any], top_n: int = 8) -> list[Any]:
     if not docs:
         return []
 
+    reranker = get_reranker()
     pairs = [(query, doc.page_content) for doc in docs]
     scores = reranker.predict(pairs)
 
@@ -213,6 +212,17 @@ def rerank_documents(query: str, docs: list[Any], top_n: int = 8) -> list[Any]:
     scored_docs.sort(key=lambda item: item[1], reverse=True)
 
     return [doc for doc, _score in scored_docs[:top_n]]
+
+
+def get_reranker():
+    global _reranker
+
+    if _reranker is None:
+        from sentence_transformers import CrossEncoder
+
+        _reranker = CrossEncoder(RERANKER_MODEL)
+
+    return _reranker
 
 
 def retrieve_documents(
