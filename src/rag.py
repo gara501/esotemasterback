@@ -72,7 +72,7 @@ DEFAULT_RAG_CONFIG = {
     "use_rerank": False,
     "initial_k": 10,
     "final_k": 6,
-    "num_predict": 4096,
+    "num_predict": 8192,
     "detail_level": "extensive",
     "force_detailed_answer": True,
 }
@@ -114,10 +114,10 @@ Reglas obligatorias:
 - No inventes páginas.
 - Si el contexto no alcanza, dilo con claridad.
 - No respondas en un solo párrafo.
-- La respuesta debe ser larga, profunda, pedagógica y estructurada.
+- La respuesta debe ser profunda, pedagógica y estructurada.
 - Usa todo el contexto relevante disponible.
-- Desarrolla cada idea con detalle.
-- Cada sección importante debe tener varios párrafos.
+- Desarrolla cada idea con detalle, pero no excedas la longitud necesaria.
+- Cada sección importante debe tener 1 o 2 párrafos.
 - Explica conceptos abstractos con ejemplos cuando el contexto lo permita.
 - Relaciona símbolos, historia, tradición y práctica esotérica cuando aparezcan en las fuentes.
 - No presentes afirmaciones místicas como hechos científicos.
@@ -150,12 +150,13 @@ Formato JSON obligatorio:
 """)
 
 
-def build_llm(num_predict: int = 4096) -> ChatGoogleGenerativeAI:
+def build_llm(num_predict: int = 8192) -> ChatGoogleGenerativeAI:
     return ChatGoogleGenerativeAI(
         model=LLM_MODEL,
         google_api_key=google_api_key,
         temperature=0.25,
         max_output_tokens=num_predict,
+        response_mime_type="application/json",
     )
 
 
@@ -167,7 +168,7 @@ def normalize_rag_config(rag_config: dict | None) -> dict:
 
     config["initial_k"] = int(config.get("initial_k", 10))
     config["final_k"] = int(config.get("final_k", 6))
-    config["num_predict"] = int(config.get("num_predict", 4096))
+    config["num_predict"] = int(config.get("num_predict", 8192))
     config["use_rerank"] = bool(config.get("use_rerank", False)) and ENABLE_RERANK
     config["force_detailed_answer"] = bool(config.get("force_detailed_answer", True))
 
@@ -190,6 +191,51 @@ def build_context(docs: list[Any]) -> str:
 
 def normalize_text(text: str) -> str:
     return " ".join(text.lower().strip().split())
+
+
+def parse_json_payload(text: str) -> dict:
+    cleaned = text.strip()
+
+    if cleaned.startswith("```json"):
+        cleaned = cleaned.replace("```json", "", 1).strip()
+
+    if cleaned.startswith("```"):
+        cleaned = cleaned.replace("```", "", 1).strip()
+
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3].strip()
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("Model response did not contain a complete JSON object.")
+
+    return json.loads(cleaned[start:end + 1])
+
+
+def safe_model_json_response(text: str, mode: str) -> str:
+    try:
+        parsed = parse_json_payload(text)
+        return json.dumps(parsed, ensure_ascii=False)
+    except Exception:
+        fallback = {
+            "title": "Respuesta incompleta del modelo",
+            "mode": mode,
+            "short_answer": (
+                "El modelo devolvió una respuesta incompleta o no válida como JSON. "
+                "Intenta de nuevo con una pregunta más específica o reduce el alcance de la consulta."
+            ),
+            "historical_context": "",
+            "symbolic_interpretation": "",
+            "expanded_analysis": "",
+            "deep_explanation": "",
+            "key_concepts": [],
+            "reflection": "",
+            "sources_used": [],
+        }
+
+        return json.dumps(fallback, ensure_ascii=False)
 
 
 def doc_to_extract(doc: Any) -> dict:
@@ -358,4 +404,4 @@ def answer_question(
         "detail_level": config["detail_level"],
     })
 
-    return response.content
+    return safe_model_json_response(response.content, selected_mode)
