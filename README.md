@@ -53,6 +53,13 @@ CHROMA_DATABASE=esoter
 GOOGLE_API_KEY=
 GOOGLE_LLM_MODEL=gemini-2.5-flash
 GOOGLE_EMBEDDING_MODEL=models/gemini-embedding-001
+ALLOWED_ORIGINS=*
+```
+
+For production, replace `ALLOWED_ORIGINS=*` with your Netlify domain:
+
+```env
+ALLOWED_ORIGINS=https://your-site.netlify.app
 ```
 
 ## Chroma Reindexing
