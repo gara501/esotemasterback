@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from functools import lru_cache
 from typing import Any
 
@@ -8,6 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_qdrant import QdrantVectorStore
 
+from src.cache import get_cached_response, set_cached_response, stable_cache_key
 from src.qdrant_store import (
     build_metadata_filter,
     detect_embedding_dimension,
@@ -186,6 +188,29 @@ def normalize_rag_config(rag_config: dict | None) -> dict:
         config["fetch_k"] = config["initial_k"]
 
     return config
+
+
+def build_response_cache_key(
+    question: str,
+    mode: str,
+    rag_config: dict,
+    filters: dict[str, Any] | None,
+) -> str:
+    settings = get_settings()
+    return stable_cache_key(
+        "rag_response",
+        {
+            "question": normalize_text(question),
+            "mode": mode,
+            "rag_config": rag_config,
+            "filters": filters or {},
+            "collection": settings.collection,
+            "llm_model": settings.google_llm_model,
+            "embedding_model": settings.google_embedding_model,
+            "reranker_model": settings.reranker_model,
+            "cache_version": os.getenv("RAG_CACHE_VERSION", "1"),
+        },
+    )
 
 
 def build_context(docs: list[Document]) -> str:
@@ -431,6 +456,12 @@ def extract_text(
     filters: dict[str, Any] | None = None,
 ) -> str:
     config = normalize_rag_config(rag_config)
+    cache_key = build_response_cache_key(question, "extract", config, filters)
+    cached_response = get_cached_response(cache_key)
+    if cached_response is not None:
+        logger.info("RAG response cache hit for extract query.")
+        return cached_response
+
     docs = retrieve_extract_documents(
         question=question,
         k=config["initial_k"],
@@ -475,7 +506,9 @@ def extract_text(
     if config["debug_chunks"]:
         result["debug_chunks"] = debug_chunks(selected_docs)
 
-    return json.dumps(result, ensure_ascii=False)
+    response_json = json.dumps(result, ensure_ascii=False)
+    set_cached_response(cache_key, response_json)
+    return response_json
 
 
 def answer_question(
@@ -489,6 +522,12 @@ def answer_question(
 
     if selected_mode == "extract":
         return extract_text(question, config, filters)
+
+    cache_key = build_response_cache_key(question, selected_mode, config, filters)
+    cached_response = get_cached_response(cache_key)
+    if cached_response is not None:
+        logger.info("RAG response cache hit for answer query.")
+        return cached_response
 
     docs = retrieve_documents(
         question=question,
@@ -531,4 +570,6 @@ def answer_question(
     if config["debug_chunks"]:
         parsed["debug_chunks"] = debug_chunks(docs)
 
-    return json.dumps(parsed, ensure_ascii=False)
+    response_json = json.dumps(parsed, ensure_ascii=False)
+    set_cached_response(cache_key, response_json)
+    return response_json

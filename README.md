@@ -40,6 +40,12 @@ INDEX_BATCH_SIZE=16
 EMBEDDING_BATCH_SIZE=4
 EMBEDDING_MAX_RETRIES=6
 EMBEDDING_RETRY_SLEEP_SECONDS=20
+ENABLE_LOCAL_CACHE=true
+ENABLE_EMBEDDING_CACHE=true
+ENABLE_RESPONSE_CACHE=true
+RESPONSE_CACHE_TTL_SECONDS=86400
+RAG_CACHE_DB=./data/rag_cache.sqlite
+RAG_CACHE_VERSION=1
 GOOGLE_API_KEY=
 GOOGLE_LLM_MODEL=gemini-2.5-flash
 GOOGLE_EMBEDDING_MODEL=models/gemini-embedding-001
@@ -69,6 +75,28 @@ EMBEDDING_RETRY_SLEEP_SECONDS=60
 
 The indexer skips already indexed chunks, so rerunning the command continues
 from the chunks that still need embeddings.
+
+## Local Cache
+
+The project uses a local SQLite cache at `data/rag_cache.sqlite` by default.
+
+- `ENABLE_EMBEDDING_CACHE=true` stores chunk embeddings by content hash and
+  embedding model. This reduces Google embedding calls when reindexing,
+  retrying after quota errors, or recreating the Qdrant collection with the
+  same books.
+- `ENABLE_RESPONSE_CACHE=true` stores complete RAG responses by question, mode,
+  filters, RAG settings, collection, LLM model, embedding model, and reranker
+  model. Repeated questions return faster and avoid extra LLM calls.
+- `RESPONSE_CACHE_TTL_SECONDS=86400` keeps cached answers for 24 hours. Use `0`
+  for no expiration.
+- Increase `RAG_CACHE_VERSION` when you make a major indexing or prompt change
+  and want to ignore old cached answers without deleting the SQLite file.
+
+To disable all local caching:
+
+```env
+ENABLE_LOCAL_CACHE=false
+```
 
 ## Ask From Console
 

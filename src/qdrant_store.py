@@ -23,6 +23,8 @@ from qdrant_client.models import (
     VectorParams,
 )
 
+from src.cache import get_cached_embedding, set_cached_embedding
+
 
 logger = logging.getLogger(__name__)
 
@@ -431,10 +433,33 @@ def upsert_payloads(
     if not new_payloads:
         return 0
 
-    vectors = embed_documents_resilient(
+    embedding_model = getattr(
         embeddings,
-        [payload["content"] for payload in new_payloads],
+        "model",
+        os.getenv("GOOGLE_EMBEDDING_MODEL", "unknown"),
     )
+    vectors_by_hash: dict[str, list[float]] = {}
+    missing_payloads = []
+
+    for payload in new_payloads:
+        text_hash = payload["content_hash"]
+        cached_vector = get_cached_embedding(embedding_model, text_hash)
+        if cached_vector is None:
+            missing_payloads.append(payload)
+            continue
+        vectors_by_hash[text_hash] = cached_vector
+
+    if missing_payloads:
+        embedded_vectors = embed_documents_resilient(
+            embeddings,
+            [payload["content"] for payload in missing_payloads],
+        )
+        for payload, vector in zip(missing_payloads, embedded_vectors):
+            text_hash = payload["content_hash"]
+            vectors_by_hash[text_hash] = vector
+            set_cached_embedding(embedding_model, text_hash, vector)
+
+    vectors = [vectors_by_hash[payload["content_hash"]] for payload in new_payloads]
     points = [
         PointStruct(
             id=payload["chunk_id"],

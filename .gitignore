@@ -10,6 +10,8 @@ __pycache__/
 .idea/
 books/
 chroma_db/
+data/*.sqlite
+data/*.sqlite-*
 app.py
 *.pyc
 *.pyo
