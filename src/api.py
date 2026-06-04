@@ -28,6 +28,7 @@ class AskRequest(BaseModel):
     question: str
     mode: str = "general"
     rag_config: dict | None = None
+    filters: dict | None = None
 
 
 @app.get("/")
@@ -41,6 +42,7 @@ def ask(request: AskRequest):
         question=request.question,
         mode=request.mode,
         rag_config=request.rag_config,
+        filters=request.filters,
     )
 
     return {"result": result}

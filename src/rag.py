@@ -1,65 +1,58 @@
 import json
-import os
+import logging
+from functools import lru_cache
 from typing import Any
 
-from dotenv import load_dotenv
-from langchain_chroma import Chroma
+from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_qdrant import QdrantVectorStore
+
+from src.qdrant_store import (
+    build_metadata_filter,
+    detect_embedding_dimension,
+    ensure_collection,
+    get_embeddings,
+    get_qdrant_client,
+    get_settings,
+)
 
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
-COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "esoteric_books")
-
-LLM_MODEL = os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash")
-EMBEDDING_MODEL = os.getenv("GOOGLE_EMBEDDING_MODEL", "models/gemini-embedding-001")
-RERANKER_MODEL = "BAAI/bge-reranker-base"
-ENABLE_RERANK = os.getenv("ENABLE_RERANK", "false").lower() == "true"
-_reranker = None
-
-
-def get_google_api_key() -> str:
-    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-
-    if not api_key:
-        raise RuntimeError(
-            "Missing Google AI Studio API key. Set GOOGLE_API_KEY or GEMINI_API_KEY."
-        )
-
-    return api_key
-
+SYSTEM_PROMPT = (
+    "Eres un asistente experto en análisis de libros y documentos. Responde "
+    "únicamente usando el contexto proporcionado. No inventes información. Si "
+    "el contexto no contiene evidencia suficiente, dilo claramente. Explica "
+    "con detalle, conecta ideas entre fragmentos y cita las fuentes por libro "
+    "y página. Prioriza precisión sobre creatividad."
+)
 
 MODE_PROMPTS = {
     "general": """
 Actúa como un maestro esotérico multidisciplinario.
 Puedes utilizar hermetismo, simbolismo, alquimia, tarot, cábala,
-gnosticismo, mitología comparada y psicología simbólica.
+gnosticismo, satanismo, mitología comparada y psicología simbólica.
 """,
-
     "extract": """
 Actúa como un buscador textual dentro de la biblioteca.
 Tu tarea NO es interpretar ni analizar.
 Tu tarea es localizar y devolver el fragmento textual más relevante.
 """,
-
     "tarot": """
 Actúa como un maestro especializado en Tarot.
 Enfócate en arcanos, simbolismo tradicional, Tarot de Marsella,
 Rider-Waite y lectura arquetípica, no adivinatoria.
 """,
-
     "cabala": """
 Actúa como un maestro especializado en Cábala y Cábala hermética.
 Enfócate en Árbol de la Vida, Sephiroth, senderos y correspondencias herméticas.
 """,
-
     "alquimia": """
 Actúa como un maestro especializado en alquimia.
 Enfócate en Nigredo, Albedo, Citrinitas, Rubedo, Mercurio, Azufre,
 Sal, Piedra filosofal y transmutación interior.
 """,
-
     "comparative": """
 Actúa como un investigador comparativo de sistemas esotéricos.
 Debes identificar similitudes, diferencias, influencias históricas,
@@ -67,36 +60,23 @@ correspondencias simbólicas y tensiones entre tradiciones.
 """,
 }
 
-
 DEFAULT_RAG_CONFIG = {
-    "use_rerank": False,
-    "initial_k": 10,
-    "final_k": 6,
+    "use_rerank": None,
+    "initial_k": None,
+    "fetch_k": 40,
+    "final_k": None,
     "num_predict": 8192,
     "detail_level": "extensive",
     "force_detailed_answer": True,
+    "debug_chunks": False,
 }
 
-
-google_api_key = get_google_api_key()
-
-embeddings = GoogleGenerativeAIEmbeddings(
-    model=EMBEDDING_MODEL,
-    google_api_key=google_api_key,
-)
-
-vectorstore = Chroma(
-    collection_name=COLLECTION_NAME,
-    embedding_function=embeddings,
-    chroma_cloud_api_key=os.environ["CHROMA_API_KEY"],
-    tenant=os.environ["CHROMA_TENANT"],
-    database=os.environ["CHROMA_DATABASE"],
-    create_collection_if_not_exists=False,
-)
-
-prompt = ChatPromptTemplate.from_template("""
-Eres un maestro de estudios esotéricos.
-
+prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", SYSTEM_PROMPT),
+        (
+            "human",
+            """
 Responde en español usando SOLO el contexto de los libros proporcionados.
 
 Modo activo:
@@ -115,13 +95,7 @@ Reglas obligatorias:
 - Si el contexto no alcanza, dilo con claridad.
 - No respondas en un solo párrafo.
 - La respuesta debe ser profunda, pedagógica y estructurada.
-- Usa todo el contexto relevante disponible.
-- Desarrolla cada idea con detalle, pero no excedas la longitud necesaria.
-- Cada sección importante debe tener 1 o 2 párrafos.
-- Explica conceptos abstractos con ejemplos cuando el contexto lo permita.
-- Relaciona símbolos, historia, tradición y práctica esotérica cuando aparezcan en las fuentes.
-- No presentes afirmaciones místicas como hechos científicos.
-- No resumas demasiado.
+- Cita fuentes por libro y página cuando uses una idea.
 
 Pregunta del usuario:
 {question}
@@ -133,6 +107,7 @@ Formato JSON obligatorio:
 {{
   "title": "...",
   "mode": "{mode}",
+  "answer": "...",
   "short_answer": "...",
   "historical_context": "...",
   "symbolic_interpretation": "...",
@@ -147,13 +122,36 @@ Formato JSON obligatorio:
     }}
   ]
 }}
-""")
+""",
+        ),
+    ]
+)
+
+_reranker = None
+
+
+@lru_cache(maxsize=1)
+def get_vectorstore() -> QdrantVectorStore:
+    settings = get_settings()
+    embeddings = get_embeddings(settings)
+    vector_size = detect_embedding_dimension(embeddings)
+    client = get_qdrant_client(settings)
+    ensure_collection(client, settings.collection, vector_size)
+
+    return QdrantVectorStore(
+        client=client,
+        collection_name=settings.collection,
+        embedding=embeddings,
+        content_payload_key="content",
+        metadata_payload_key="metadata",
+    )
 
 
 def build_llm(num_predict: int = 8192) -> ChatGoogleGenerativeAI:
+    settings = get_settings()
     return ChatGoogleGenerativeAI(
-        model=LLM_MODEL,
-        google_api_key=google_api_key,
+        model=settings.google_llm_model,
+        google_api_key=settings.google_api_key,
         temperature=0.25,
         max_output_tokens=num_predict,
         response_mime_type="application/json",
@@ -161,32 +159,53 @@ def build_llm(num_predict: int = 8192) -> ChatGoogleGenerativeAI:
 
 
 def normalize_rag_config(rag_config: dict | None) -> dict:
+    settings = get_settings()
     config = DEFAULT_RAG_CONFIG.copy()
-
     if rag_config:
         config.update(rag_config)
 
-    config["initial_k"] = int(config.get("initial_k", 10))
-    config["final_k"] = int(config.get("final_k", 6))
+    if config.get("initial_k") is None:
+        config["initial_k"] = settings.retrieval_k
+    if config.get("final_k") is None:
+        config["final_k"] = settings.final_top_n
+    if config.get("use_rerank") is None:
+        config["use_rerank"] = settings.use_reranker
+
+    config["initial_k"] = int(config.get("initial_k", 20))
+    config["fetch_k"] = int(config.get("fetch_k", 40))
+    config["final_k"] = int(config.get("final_k", 8))
     config["num_predict"] = int(config.get("num_predict", 8192))
-    config["use_rerank"] = bool(config.get("use_rerank", False)) and ENABLE_RERANK
+    config["use_rerank"] = bool(config.get("use_rerank")) and settings.use_reranker
     config["force_detailed_answer"] = bool(config.get("force_detailed_answer", True))
+    config["debug_chunks"] = bool(config.get("debug_chunks", False))
 
     if config["final_k"] > config["initial_k"]:
         config["final_k"] = config["initial_k"]
 
+    if config["fetch_k"] < config["initial_k"]:
+        config["fetch_k"] = config["initial_k"]
+
     return config
 
 
-def build_context(docs: list[Any]) -> str:
-    return "\n\n".join(
-        (
-            f"Source: {doc.metadata.get('source', 'Fuente desconocida')} "
-            f"page {doc.metadata.get('page', 'N/A')}\n"
-            f"{doc.page_content}"
+def build_context(docs: list[Document]) -> str:
+    parts = []
+    for index, doc in enumerate(docs, start=1):
+        metadata = doc.metadata
+        parts.append(
+            "\n".join(
+                [
+                    f"[Chunk {index}]",
+                    f"Libro: {metadata.get('title', 'Fuente desconocida')}",
+                    f"Archivo: {metadata.get('file_name', metadata.get('source', 'N/A'))}",
+                    f"Página: {metadata.get('page', 'N/A')}",
+                    f"Chunk ID: {metadata.get('chunk_id', 'N/A')}",
+                    "Texto:",
+                    doc.page_content,
+                ]
+            )
         )
-        for doc in docs
-    )
+    return "\n\n".join(parts)
 
 
 def normalize_text(text: str) -> str:
@@ -195,165 +214,266 @@ def normalize_text(text: str) -> str:
 
 def parse_json_payload(text: str) -> dict:
     cleaned = text.strip()
-
     if cleaned.startswith("```json"):
         cleaned = cleaned.replace("```json", "", 1).strip()
-
     if cleaned.startswith("```"):
         cleaned = cleaned.replace("```", "", 1).strip()
-
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3].strip()
 
     start = cleaned.find("{")
     end = cleaned.rfind("}")
-
     if start == -1 or end == -1 or end <= start:
         raise ValueError("Model response did not contain a complete JSON object.")
 
-    return json.loads(cleaned[start:end + 1])
+    return json.loads(cleaned[start : end + 1])
 
 
-def safe_model_json_response(text: str, mode: str) -> str:
+def fallback_payload(mode: str, message: str) -> dict:
+    return {
+        "title": "No se encontró información suficiente",
+        "mode": mode,
+        "answer": message,
+        "short_answer": message,
+        "historical_context": "",
+        "symbolic_interpretation": "",
+        "expanded_analysis": "",
+        "deep_explanation": "",
+        "key_concepts": [],
+        "reflection": "",
+        "sources_used": [],
+        "grouped_sources": [],
+    }
+
+
+def model_payload(text: str, mode: str) -> dict:
     try:
         parsed = parse_json_payload(text)
-        return json.dumps(parsed, ensure_ascii=False)
+        if not isinstance(parsed, dict):
+            raise ValueError("Model JSON response is not an object.")
+        return parsed
     except Exception:
-        fallback = {
-            "title": "Respuesta incompleta del modelo",
-            "mode": mode,
-            "short_answer": (
-                "El modelo devolvió una respuesta incompleta o no válida como JSON. "
-                "Intenta de nuevo con una pregunta más específica o reduce el alcance de la consulta."
+        return fallback_payload(
+            mode,
+            (
+                "El modelo devolvió una respuesta incompleta o no válida como "
+                "JSON. Intenta de nuevo con una pregunta más específica o "
+                "reduce el alcance de la consulta."
             ),
-            "historical_context": "",
-            "symbolic_interpretation": "",
-            "expanded_analysis": "",
-            "deep_explanation": "",
-            "key_concepts": [],
-            "reflection": "",
-            "sources_used": [],
-        }
-
-        return json.dumps(fallback, ensure_ascii=False)
+        )
 
 
-def doc_to_extract(doc: Any) -> dict:
+def doc_to_source(doc: Document) -> dict:
     return {
-        "book": doc.metadata.get("source", "Fuente desconocida"),
+        "book": doc.metadata.get("title")
+        or doc.metadata.get("source")
+        or "Fuente desconocida",
         "page": doc.metadata.get("page", "N/A"),
+    }
+
+
+def doc_to_extract(doc: Document) -> dict:
+    return {
+        "book": doc.metadata.get("title")
+        or doc.metadata.get("source")
+        or "Fuente desconocida",
+        "page": doc.metadata.get("page", "N/A"),
+        "file_name": doc.metadata.get("file_name"),
+        "chunk_id": doc.metadata.get("chunk_id"),
         "text": doc.page_content.strip(),
     }
 
 
-def rerank_documents(query: str, docs: list[Any], top_n: int = 8) -> list[Any]:
-    if not docs:
-        return []
+def group_sources(docs: list[Document]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], set[int]] = {}
 
-    reranker = get_reranker()
-    pairs = [(query, doc.page_content) for doc in docs]
-    scores = reranker.predict(pairs)
+    for doc in docs:
+        title = doc.metadata.get("title") or "Fuente desconocida"
+        file_name = doc.metadata.get("file_name") or doc.metadata.get("source") or ""
+        key = (title, file_name)
+        grouped.setdefault(key, set())
 
-    scored_docs = list(zip(docs, scores))
-    scored_docs.sort(key=lambda item: item[1], reverse=True)
+        page = doc.metadata.get("page")
+        try:
+            grouped[key].add(int(page))
+        except (TypeError, ValueError):
+            continue
 
-    return [doc for doc, _score in scored_docs[:top_n]]
+    return [
+        {
+            "title": title,
+            "file_name": file_name,
+            "pages": sorted(pages),
+        }
+        for (title, file_name), pages in grouped.items()
+    ]
+
+
+def debug_chunks(docs: list[Document]) -> list[dict[str, Any]]:
+    return [
+        {
+            "title": doc.metadata.get("title"),
+            "file_name": doc.metadata.get("file_name"),
+            "page": doc.metadata.get("page"),
+            "chunk_index": doc.metadata.get("chunk_index"),
+            "chunk_id": doc.metadata.get("chunk_id"),
+            "content_hash": doc.metadata.get("content_hash"),
+            "text_preview": doc.page_content[:400],
+        }
+        for doc in docs
+    ]
 
 
 def get_reranker():
     global _reranker
+    if _reranker is not None:
+        return _reranker
 
-    if _reranker is None:
+    settings = get_settings()
+    try:
         from sentence_transformers import CrossEncoder
 
-        _reranker = CrossEncoder(RERANKER_MODEL)
+        _reranker = CrossEncoder(settings.reranker_model)
+        return _reranker
+    except Exception as exc:
+        logger.warning("Reranker unavailable; using Qdrant order. Error: %s", exc)
+        return None
 
-    return _reranker
+
+def rerank_documents(query: str, docs: list[Document], top_n: int) -> list[Document]:
+    if not docs:
+        return []
+
+    reranker = get_reranker()
+    if reranker is None:
+        return docs[:top_n]
+
+    pairs = [(query, doc.page_content) for doc in docs]
+    scores = reranker.predict(pairs)
+    scored_docs = list(zip(docs, scores))
+    scored_docs.sort(key=lambda item: float(item[1]), reverse=True)
+    return [doc for doc, _score in scored_docs[:top_n]]
+
+
+def merge_documents(*doc_groups: list[Document]) -> list[Document]:
+    merged = []
+    seen = set()
+    for docs in doc_groups:
+        for doc in docs:
+            key = doc.metadata.get("chunk_id") or (
+                doc.metadata.get("file_name"),
+                doc.metadata.get("page"),
+                doc.page_content[:120],
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(doc)
+    return merged
 
 
 def retrieve_documents(
     question: str,
     mode: str,
     rag_config: dict,
-) -> list[Any]:
+    filters: dict[str, Any] | None = None,
+) -> list[Document]:
+    vectorstore = get_vectorstore()
+    qdrant_filter = build_metadata_filter(filters)
     search_query = f"{mode}: {question}"
 
-    initial_docs = vectorstore.similarity_search(
+    similarity_docs = vectorstore.similarity_search(
         search_query,
         k=rag_config["initial_k"],
+        filter=qdrant_filter,
     )
 
-    if not rag_config["use_rerank"]:
-        return initial_docs[:rag_config["final_k"]]
+    try:
+        mmr_docs = vectorstore.max_marginal_relevance_search(
+            search_query,
+            k=rag_config["initial_k"],
+            fetch_k=rag_config["fetch_k"],
+            lambda_mult=0.5,
+            filter=qdrant_filter,
+        )
+    except Exception as exc:
+        logger.warning("MMR search unavailable; using similarity only. Error: %s", exc)
+        mmr_docs = []
 
-    return rerank_documents(
-        query=question,
-        docs=initial_docs,
-        top_n=rag_config["final_k"],
+    candidates = merge_documents(similarity_docs, mmr_docs)
+
+    if rag_config["use_rerank"]:
+        return rerank_documents(
+            query=question,
+            docs=candidates,
+            top_n=rag_config["final_k"],
+        )
+
+    return candidates[: rag_config["final_k"]]
+
+
+def retrieve_extract_documents(
+    question: str,
+    k: int = 20,
+    filters: dict[str, Any] | None = None,
+) -> list[Document]:
+    vectorstore = get_vectorstore()
+    return vectorstore.similarity_search(
+        question,
+        k=k,
+        filter=build_metadata_filter(filters),
     )
 
 
-def retrieve_extract_documents(question: str, k: int = 20) -> list[Any]:
-    return vectorstore.similarity_search(question, k=k)
-
-
-def extract_text(question: str, rag_config: dict | None = None) -> str:
+def extract_text(
+    question: str,
+    rag_config: dict | None = None,
+    filters: dict[str, Any] | None = None,
+) -> str:
     config = normalize_rag_config(rag_config)
-
     docs = retrieve_extract_documents(
         question=question,
         k=config["initial_k"],
+        filters=filters,
     )
 
-    if not docs:
-        result = {
-            "title": "No se encontraron extractos",
-            "mode": "extract",
-            "found": False,
-            "matched_query": question,
-            "extracts": [],
-            "notes": "No se encontraron fragmentos relevantes en Chroma Cloud.",
-        }
-
-        return json.dumps(result, ensure_ascii=False)
-
     if config["use_rerank"]:
-        docs = rerank_documents(
-            query=question,
-            docs=docs,
-            top_n=config["final_k"],
-        )
+        docs = rerank_documents(question, docs, config["final_k"])
     else:
-        docs = docs[:config["final_k"]]
+        docs = docs[: config["final_k"]]
 
     normalized_question = normalize_text(question)
-
     exact_matches = []
     semantic_matches = []
 
     for doc in docs:
         normalized_content = normalize_text(doc.page_content)
-
         if normalized_question and normalized_question in normalized_content:
             exact_matches.append(doc)
         else:
             semantic_matches.append(doc)
 
     selected_docs = exact_matches if exact_matches else semantic_matches
-
-    extracts = [doc_to_extract(doc) for doc in selected_docs[:config["final_k"]]]
+    extracts = [doc_to_extract(doc) for doc in selected_docs[: config["final_k"]]]
 
     result = {
-        "title": "Extracto textual encontrado",
+        "title": "Extracto textual encontrado" if extracts else "No se encontraron extractos",
         "mode": "extract",
         "found": len(extracts) > 0,
         "matched_query": question,
+        "answer": "",
         "extracts": extracts,
+        "sources_used": [doc_to_source(doc) for doc in selected_docs],
+        "grouped_sources": group_sources(selected_docs),
         "notes": (
-            "Se devuelven fragmentos textuales recuperados de Chroma Cloud. "
-            "Si el texto pertenece a una sección larga, puede aparecer dividido en varios fragmentos."
+            "Se devuelven fragmentos textuales recuperados de Qdrant Cloud. "
+            "Si el texto pertenece a una sección larga, puede aparecer dividido "
+            "en varios fragmentos."
         ),
     }
+
+    if config["debug_chunks"]:
+        result["debug_chunks"] = debug_chunks(selected_docs)
 
     return json.dumps(result, ensure_ascii=False)
 
@@ -362,46 +482,53 @@ def answer_question(
     question: str,
     mode: str = "general",
     rag_config: dict | None = None,
+    filters: dict[str, Any] | None = None,
 ) -> str:
     selected_mode = mode if mode in MODE_PROMPTS else "general"
     config = normalize_rag_config(rag_config)
 
     if selected_mode == "extract":
-        return extract_text(question, config)
+        return extract_text(question, config, filters)
 
     docs = retrieve_documents(
         question=question,
         mode=selected_mode,
         rag_config=config,
+        filters=filters,
     )
 
     if not docs:
-        result = {
-            "title": "No se encontró información suficiente",
-            "mode": selected_mode,
-            "short_answer": "No encontré fragmentos relevantes en Chroma Cloud para responder esta pregunta.",
-            "historical_context": "",
-            "symbolic_interpretation": "",
-            "expanded_analysis": "",
-            "deep_explanation": "",
-            "key_concepts": [],
-            "reflection": "",
-            "sources_used": [],
-        }
-
-        return json.dumps(result, ensure_ascii=False)
+        return json.dumps(
+            fallback_payload(
+                selected_mode,
+                (
+                    "No encontré fragmentos relevantes en Qdrant Cloud para "
+                    "responder esta pregunta con evidencia suficiente."
+                ),
+            ),
+            ensure_ascii=False,
+        )
 
     context = build_context(docs)
-
     llm = build_llm(num_predict=config["num_predict"])
     chain = prompt | llm
+    response = chain.invoke(
+        {
+            "question": question,
+            "context": context,
+            "mode": selected_mode,
+            "mode_prompt": MODE_PROMPTS[selected_mode],
+            "detail_level": config["detail_level"],
+        }
+    )
 
-    response = chain.invoke({
-        "question": question,
-        "context": context,
-        "mode": selected_mode,
-        "mode_prompt": MODE_PROMPTS[selected_mode],
-        "detail_level": config["detail_level"],
-    })
+    parsed = model_payload(response.content, selected_mode)
+    parsed["mode"] = selected_mode
+    parsed["sources_used"] = [doc_to_source(doc) for doc in docs]
+    parsed["grouped_sources"] = group_sources(docs)
+    parsed.setdefault("answer", parsed.get("short_answer", ""))
 
-    return safe_model_json_response(response.content, selected_mode)
+    if config["debug_chunks"]:
+        parsed["debug_chunks"] = debug_chunks(docs)
+
+    return json.dumps(parsed, ensure_ascii=False)
