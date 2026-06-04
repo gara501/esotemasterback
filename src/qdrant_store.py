@@ -110,7 +110,7 @@ def get_settings() -> RAGSettings:
             "RERANKER_MODEL",
             "cross-encoder/ms-marco-MiniLM-L-6-v2",
         ),
-        google_llm_model=os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash"),
+        google_llm_model=os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash-lite"),
         google_embedding_model=os.getenv(
             "GOOGLE_EMBEDDING_MODEL",
             "models/gemini-embedding-001",

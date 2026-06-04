@@ -281,8 +281,8 @@ def model_payload(text: str, mode: str) -> dict:
         return fallback_payload(
             mode,
             (
-                "El modelo devolvió una respuesta incompleta o no válida como "
-                "JSON. Intenta de nuevo con una pregunta más específica o "
+                "El modelo devolvió una respuesta incompleta o no válida "
+                ". Intenta de nuevo con una pregunta más específica o "
                 "reduce el alcance de la consulta."
             ),
         )
@@ -497,7 +497,7 @@ def extract_text(
         "sources_used": [doc_to_source(doc) for doc in selected_docs],
         "grouped_sources": group_sources(selected_docs),
         "notes": (
-            "Se devuelven fragmentos textuales recuperados de Qdrant Cloud. "
+            "El maestro retorna fragmentos textuales recuperados de los libros. "
             "Si el texto pertenece a una sección larga, puede aparecer dividido "
             "en varios fragmentos."
         ),
