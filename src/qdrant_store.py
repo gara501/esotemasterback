@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from dotenv import load_dotenv
-from langchain_community.document_loaders import PyPDFLoader
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -272,6 +270,9 @@ def iter_pdf_chunk_payloads(
     pdf_path: Path,
     settings: RAGSettings,
 ) -> Iterable[dict[str, Any]]:
+    from langchain_community.document_loaders import PyPDFLoader
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
     loader = PyPDFLoader(str(pdf_path))
     pages = loader.load()
     splitter = RecursiveCharacterTextSplitter(
