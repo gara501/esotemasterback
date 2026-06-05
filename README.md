@@ -125,12 +125,12 @@ python -m uvicorn src.api:app --host 127.0.0.1 --port 8000 --reload
 ## Render Deployment
 
 For Render Free or any service limited to 512 MB, keep the backend lightweight.
-Use `requirements.txt`, not `requirements-local.txt`.
+Use `requirements-render.txt`, not `requirements-local.txt`.
 
 Build command:
 
 ```bash
-pip install -r requirements.txt
+pip install --no-cache-dir -r requirements-render.txt
 ```
 
 Start command:
@@ -154,6 +154,17 @@ RAG_CACHE_DB=/tmp/rag_cache.sqlite
 Do not install `sentence-transformers` on a 512 MB Render service. It pulls in
 PyTorch/Transformers and can exceed the memory limit. If you need reranking in
 production, use a larger Render instance or an external reranking API.
+
+If your Render dashboard has a manual Build Command, make sure it is exactly:
+
+```bash
+pip install --no-cache-dir -r requirements-render.txt
+```
+
+If it still installs `sentence-transformers`, `streamlit`, or `torch`, Render is
+not using the current production requirements. Clear the build cache and deploy
+the latest commit, or replace the dashboard Build Command with the command
+above.
 
 Health check:
 

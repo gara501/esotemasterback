@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: esoteric-ai-teacher
+    runtime: python
+    buildCommand: pip install --no-cache-dir -r requirements-render.txt
+    startCommand: uvicorn src.api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: USE_RERANKER
+        value: "false"
+      - key: RETRIEVAL_K
+        value: "12"
+      - key: FINAL_TOP_N
+        value: "6"
+      - key: ENABLE_LOCAL_CACHE
+        value: "true"
+      - key: ENABLE_RESPONSE_CACHE
+        value: "true"
+      - key: ENABLE_EMBEDDING_CACHE
+        value: "false"
+      - key: RAG_CACHE_DB
+        value: /tmp/rag_cache.sqlite
