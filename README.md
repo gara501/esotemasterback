@@ -20,6 +20,12 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
+For local Streamlit and local reranking support, install optional dependencies:
+
+```powershell
+pip install -r requirements-local.txt
+```
+
 Fill `.env` with your Qdrant Cloud and Google AI Studio credentials. Do not
 commit `.env`.
 
@@ -34,7 +40,7 @@ CHUNK_SIZE=1000
 CHUNK_OVERLAP=200
 RETRIEVAL_K=20
 FINAL_TOP_N=8
-USE_RERANKER=true
+USE_RERANKER=false
 RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 INDEX_BATCH_SIZE=16
 EMBEDDING_BATCH_SIZE=4
@@ -115,6 +121,39 @@ python query_rag.py "Busca una cita sobre el árbol de la vida" --mode extract -
 ```powershell
 python -m uvicorn src.api:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+## Render Deployment
+
+For Render Free or any service limited to 512 MB, keep the backend lightweight.
+Use `requirements.txt`, not `requirements-local.txt`.
+
+Build command:
+
+```bash
+pip install -r requirements.txt
+```
+
+Start command:
+
+```bash
+uvicorn src.api:app --host 0.0.0.0 --port $PORT
+```
+
+Recommended Render environment variables:
+
+```env
+USE_RERANKER=false
+RETRIEVAL_K=12
+FINAL_TOP_N=6
+ENABLE_LOCAL_CACHE=true
+ENABLE_RESPONSE_CACHE=true
+ENABLE_EMBEDDING_CACHE=false
+RAG_CACHE_DB=/tmp/rag_cache.sqlite
+```
+
+Do not install `sentence-transformers` on a 512 MB Render service. It pulls in
+PyTorch/Transformers and can exceed the memory limit. If you need reranking in
+production, use a larger Render instance or an external reranking API.
 
 Health check:
 
