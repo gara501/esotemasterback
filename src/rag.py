@@ -212,8 +212,23 @@ def normalize_text(text: str) -> str:
     return " ".join(text.lower().strip().split())
 
 
-def parse_json_payload(text: str) -> dict:
-    cleaned = text.strip()
+def response_text(content: Any) -> str:
+    """Gemini 3+ devuelve content como lista de bloques; extrae solo el texto."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text") or "")
+        return "".join(parts)
+    return str(content or "")
+
+
+def parse_json_payload(text: Any) -> dict:
+    cleaned = response_text(text).strip()
     if cleaned.startswith("```json"):
         cleaned = cleaned.replace("```json", "", 1).strip()
     if cleaned.startswith("```"):
@@ -246,13 +261,18 @@ def fallback_payload(mode: str, message: str) -> dict:
     }
 
 
-def model_payload(text: str, mode: str) -> dict:
+def model_payload(text: Any, mode: str) -> dict:
     try:
         parsed = parse_json_payload(text)
         if not isinstance(parsed, dict):
             raise ValueError("Model JSON response is not an object.")
         return parsed
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "No se pudo parsear la respuesta del modelo: %s. Inicio: %r",
+            exc,
+            response_text(text)[:500],
+        )
         return fallback_payload(
             mode,
             (
@@ -527,6 +547,10 @@ def answer_question(
     parsed["sources_used"] = [doc_to_source(doc) for doc in docs]
     parsed["grouped_sources"] = group_sources(docs)
     parsed.setdefault("answer", parsed.get("short_answer", ""))
+    if not parsed.get("short_answer"):
+        parsed["short_answer"] = parsed.get("answer", "")
+    if not parsed.get("expanded_analysis") and parsed.get("deep_explanation"):
+        parsed["expanded_analysis"] = parsed["deep_explanation"]
 
     if config["debug_chunks"]:
         parsed["debug_chunks"] = debug_chunks(docs)
